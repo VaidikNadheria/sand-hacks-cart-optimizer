@@ -29,6 +29,7 @@ let approved = ''
 let notice = ''
 let mode = ''
 let gemini = false
+let liveListings = false
 let busy = false
 let shoppingText = ''
 let question = ''
@@ -38,6 +39,8 @@ let editOffer = ''
 let offerError = ''
 let importVersion = 0
 let answers: {question:string;answer:string}[] = []
+type ListingDraft = {url:string;retailer:Store;title:string;price:string;seller:string;brand:string;available:boolean|null;checkedAt:string}
+const listingDrafts = new WeakMap<HTMLFormElement, ListingDraft>()
 
 function field(label: string, name: string, value = '', options = '') {
   return '<label>'+label+'<input name="'+name+'" value="'+esc(value)+'" '+options+'></label>'
@@ -158,6 +161,7 @@ function manual() {
   <p>Copy the price, pack, and seller from the retailer page. Confirm stock and shipping eligibility to include the offer.</p>
   <form id="manual"><div class="fields">
   ${field('Listing URL','url',offer?.url,'type="url" placeholder="https://…"')}
+  <div id="listing-lookup" ${liveListings?'':'hidden'}><button class="secondary" data-action="fetch-listing" type="button">Look up listing</button><p id="lookup-status" role="status"></p></div>
   ${field('Exact listing title','title',offer?.title ?? line.exact,'required')}
   ${selected('Retailer','retailer',[...stores],offer?.retailer ?? 'Target')}${field('Seller','seller',offer?.seller,'placeholder="e.g. Target"')}
   ${field('Price per pack ($)','price',offer?(offer.cents/100).toFixed(2):'','inputmode="decimal" required')}${field('Units per pack','pack',String(offer?.pack ?? 1),'type="number" min="1" max="99" required')}
@@ -169,6 +173,54 @@ function manual() {
   <button class="primary" type="submit">${offer?'Save listing':'Add manual offer'}</button>
   <button class="text-btn" data-action="close-offer" type="button">Cancel</button>
   ${offer?'<button class="text-btn" data-action="delete-offer" type="button">Remove listing</button>':''}</form></section>`
+}
+async function prefillListing(form: HTMLFormElement, button: HTMLButtonElement) {
+  const input = (name: string) => form.elements.namedItem(name) as HTMLInputElement
+  const url = input('url').value.trim()
+  const status = form.querySelector('#lookup-status')!
+  if (!url) {
+    status.textContent = 'Paste a product URL first.'
+    return
+  }
+  const editable = ['retailer','title','price','seller','brand','availability','shipping','pack','size','tags']
+  const original = editable.map(name=>input(name).value)
+  const checkedBefore = input('certain').checked
+  button.disabled = true
+  status.textContent = 'Checking the retailer listing…'
+  try {
+    const response = await fetch('/api/listing',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url}),
+    })
+    const draft = await response.json()
+    if (input('url').value.trim()!==url) {
+      status.textContent = 'The URL changed. Run the lookup again for this listing.'
+      return
+    }
+    if (!response.ok) throw new Error(draft.error)
+    if (editable.some((name,index)=>input(name).value!==original[index]) || input('certain').checked!==checkedBefore) {
+      status.textContent = 'Your edits were kept. Run the lookup again to prefill these fields.'
+      return
+    }
+    const listing = draft as ListingDraft
+    listingDrafts.set(form,listing)
+    input('url').value = listing.url
+    input('retailer').value = listing.retailer
+    input('title').value = listing.title
+    input('price').value = listing.price
+    input('seller').value = listing.seller
+    input('brand').value = listing.brand
+    input('availability').value = listing.available===true?'Available':listing.available===false?'Unavailable':'Unknown'
+    input('shipping').value = 'Unknown fee'
+    input('pack').value = '1'
+    input('size').value = ''
+    input('tags').value = ''
+    input('certain').checked = false
+    status.textContent = 'Bright Data filled the available listing fields. Check the pack, variant, stock, seller, and shipping before saving.'
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : 'Lookup failed. Enter the offer manually.'
+  } finally {
+    button.disabled = false
+  }
 }
 function showMobileResults() {
   if (matchMedia('(max-width: 820px)').matches) root.querySelector('#results')?.scrollIntoView({block:'start'})
@@ -255,6 +307,10 @@ root.addEventListener('input', event=>{
 root.addEventListener('click', event=>{
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]')
   if (!button) return
+  if (button.dataset.action==='fetch-listing' && button.form) {
+    void prefillListing(button.form,button)
+    return
+  }
   readLines()
   if (busy) cancelImport()
   const lineId = button.dataset.line || button.closest<HTMLElement>('.line')?.dataset.id || ''
@@ -343,6 +399,13 @@ root.addEventListener('submit', async event=>{
       seller:stores.find(store=>store.toLowerCase()===get('seller').toLowerCase()) ?? get('seller'),cents:price,pack,brand:get('brand'),size:get('size'),tags:textTags(get('tags')),
       available:get('availability')==='Available'?true:get('availability')==='Unavailable'?false:null,
       certain:data.has('certain'),standard:get('shipping')==='Standard eligible',source:'Manual',url:get('url')}
+    const draft = listingDrafts.get(form)
+    const previous = offers.find(entry=>entry.id===editOffer)
+    if (draft && draft.url===offer.url && draft.retailer===offer.retailer && draft.title===offer.title && cents(draft.price)===price) {
+      offer.note = 'Price retrieved by Bright Data at '+draft.checkedAt+' · Eligibility uses shopper confirmation'
+    } else if (!draft && previous?.url===offer.url && previous.retailer===offer.retailer && previous.title===offer.title && previous.cents===price) {
+      offer.note = previous.note
+    }
     offers = [...offers.filter(entry=>entry.id!==offer.id),offer]
     notice = 'Manual listing saved for '+line.product+'.'
     offerLine=''
@@ -407,4 +470,9 @@ fetch('/api/status').then(response=>response.json()).then(output=>{
   if (root.querySelector('.ai')) return
   const compare = root.querySelector('#compare')!
   compare.insertAdjacentHTML('beforebegin', aiEditor())
+}).catch(()=>{})
+fetch('/api/listing/status').then(response=>response.json()).then(output=>{
+  liveListings = output.enabled === true
+  const lookup = root.querySelector<HTMLElement>('#listing-lookup')
+  if (lookup) lookup.hidden = !liveListings
 }).catch(()=>{})

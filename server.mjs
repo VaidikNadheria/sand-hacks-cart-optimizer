@@ -2,15 +2,17 @@ import {createServer} from 'node:http'
 import {readFile} from 'node:fs/promises'
 import {loadEnvFile} from 'node:process'
 import {geminiConfig,handleApi} from './gemini.mjs'
+import {handleListings,listingConfig} from './listings.mjs'
 
 for (const file of ['.env.local','.env']) {
   try { loadEnvFile(file) } catch (error) { if (error.code!=='ENOENT') throw error }
 }
 const config = geminiConfig(process.env)
+const listings = listingConfig(process.env)
 const types = {html:'text/html',js:'text/javascript',css:'text/css'}
 const port = Number(process.env.PORT || 4173)
 createServer(async (req,res)=>{
-  if (await handleApi(req,res,config)) return
+  if (await handleApi(req,res,config) || await handleListings(req,res,listings)) return
   const pathname = req.url?.split('?')[0]
   const file = pathname==='/' ? 'index.html' : /^\/assets\/[\w.-]+\.(js|css)$/.test(pathname??'') ? pathname.slice(1) : ''
   try {
