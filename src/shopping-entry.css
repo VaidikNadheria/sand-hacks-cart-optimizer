@@ -1,0 +1,6 @@
+form.shopping-entry{display:flex;align-items:stretch;gap:8px;max-width:780px;margin:0}
+.shopping-entry textarea{flex:1;min-width:0;min-height:51px;padding:14px 16px;border:1px solid #ccd5e3;border-radius:9px;background:#fff;resize:vertical;font:inherit}
+.shopping-entry button{margin:0;padding-inline:18px;flex-shrink:0}
+.shopping-entry .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.marketplace-card,.marketplace-cart{border-radius:14px}
+@media(max-width:520px){form.shopping-entry{flex-direction:column}.shopping-entry button{min-height:44px}}

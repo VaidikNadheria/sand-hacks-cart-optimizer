@@ -75,3 +75,59 @@ test('a cheaper item can bring a retailer below free shipping and raise the tota
   assert.equal(trial.next.total,4096)
   assert.equal(trial.savings,-79)
 })
+
+test('selected cart prices only compatible rows and estimates shipping when all rows are eligible',async()=>{
+  const {selectedCart} = await import('../src/cart.ts')
+  const calculator = snapshot.find(offer=>offer.id==='tc')!
+  const cleanser = snapshot.find(offer=>offer.id==='Walmartwash')!
+  const lotion = snapshot.find(offer=>offer.id==='Walmartlotion')!
+  const chosen = new Map([[demo[0].id,calculator],[demo[1].id,cleanser]])
+  assert.equal(selectedCart(demo,chosen).remaining,1)
+  assert.equal(selectedCart(demo,chosen).subtotal,2996)
+  assert.equal(selectedCart(demo,chosen).complete,null)
+  chosen.set(demo[2].id,lotion)
+  assert.equal(selectedCart(demo,chosen).complete?.total,5291)
+  chosen.set(demo[2].id,{...lotion,standard:false})
+  const unknown = selectedCart(demo,chosen)
+  assert.equal(unknown.rows[2].issue,'Shipping fee unknown')
+  assert.equal(unknown.complete,null)
+  const changed = [{...demo[0],product:'Notebook'},demo[1],demo[2]]
+  assert.equal(selectedCart(changed,chosen).rows[0].issue,'Item name changed')
+})
+
+test('selected-cart swaps hold other retailer selections fixed and respect row pack rules',async()=>{
+  const {selectedCart} = await import('../src/cart.ts')
+  const {swapOffers} = await import('../src/swap.ts')
+  const chosen = new Map(demo.map(line=>[line.id,swapOffers.find(offer=>offer.retailer==='Target'&&offer.product===line.product)!]))
+  const plan = selectedCart(demo,chosen).complete!
+  const trial = substitutions(demo,swapOffers,3700,plan,chosen)[0]
+  assert.equal(trial.next.total,3697)
+  assert.equal(trial.next.purchases[0].offer.id,chosen.get(demo[0].id)?.id)
+  assert.equal(trial.next.purchases[2].offer.id,chosen.get(demo[2].id)?.id)
+  const large = {...demo[1],quantity:3,multi:true}
+  const twoPack = {...chosen.get(demo[1].id)!,pack:2}
+  const cart = selectedCart([large],new Map([[large.id,twoPack]]))
+  assert.equal(cart.complete?.purchases[0].packs,2)
+  assert.equal(selectedCart([{...large,multi:false}],new Map([[large.id,twoPack]])).rows[0].issue,'Multipack requires approval')
+})
+
+test('marketplace selections keep item subtotals and never borrow retailer shipping policies',async()=>{
+  const {exclusion,selectionIssue,selectedCart,hasStandardShipping} = await import('../src/cart.ts')
+  const line = demo[1]
+  for (const retailer of ['Target','Walmart'] as const) {
+    const original = snapshot.find(offer=>offer.product===line.product && offer.retailer===retailer)!
+    const marketplace = {...original,seller:'Independent Shop',cents:4900,standard:true}
+    assert.equal(selectionIssue(line,marketplace),'')
+    assert.equal(hasStandardShipping(marketplace),false)
+    assert.equal(exclusion(line,marketplace),'Shipping fee unknown')
+    const cart = selectedCart([line],new Map([[line.id,marketplace]]))
+    assert.equal(cart.subtotal,4900)
+    assert.equal(cart.remaining,0)
+    assert.equal(cart.complete,null)
+    assert.equal(optimize([line],[marketplace]).best,null)
+    assert.equal(hasStandardShipping(original),true)
+    assert.equal(selectionIssue(line,{...original,standard:false}),'')
+    assert.equal(exclusion(line,{...original,standard:false}),'Shipping fee unknown')
+    assert.equal(selectionIssue(line,{...marketplace,seller:''}),'Seller unknown')
+  }
+})

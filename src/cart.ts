@@ -1,9 +1,12 @@
+import {exactMatch,recentHistorical,savedPriceRecent,sizeMatch} from './fit.ts'
 export const stores = ['Target', 'Walmart'] as const
-export type Store = typeof stores[number]
+export type PolicyStore = typeof stores[number]
+export type Store = PolicyStore | 'Amazon'
 export type Attribute = 'brand' | 'size'
 export type Line = {
   id: string
   product: string
+  query?: string
   quantity: number
   exact: string
   must: string[]
@@ -11,6 +14,8 @@ export type Line = {
   size: string
   flexible: Attribute[]
   multi: boolean
+  preferences?: string[]
+  priceCap?: number | null
 }
 export type Offer = {
   id: string
@@ -27,9 +32,11 @@ export type Offer = {
   available: boolean | null
   standard: boolean
   certain: boolean
-  source: 'Snapshot' | 'Manual' | 'Sample' | 'Verified'
+  source: 'Historical estimate' | 'Snapshot' | 'Manual' | 'Sample' | 'Verified' | 'Retailer data'
   url: string
   note?: string
+  historicalPriceAt?: string
+  savedQuote?: boolean
 }
 export const policies = {
   Target: { threshold: 3500, fee: 599, url: 'https://www.target.com/help/article/000055608' },
@@ -51,21 +58,31 @@ export function matchesLine(line: Line, offer: Offer) {
   return offer.lineId ? offer.lineId === line.id : same(offer.product, line.product)
 }
 
-export function exclusion(line: Line, offer: Offer) {
+export function selectionIssue(line: Line, offer: Offer) {
   if (!offer.certain) return 'Variant unconfirmed'
-  if (offer.seller !== offer.retailer) return offer.seller ? 'Third-party seller' : 'Seller unknown'
-  if (offer.available !== true) return offer.available === null ? 'Availability unknown' : 'Unavailable'
+  const historical = Boolean(offer.historicalPriceAt)
+  if (historical && !(offer.savedQuote?savedPriceRecent(offer.historicalPriceAt!):recentHistorical(offer.historicalPriceAt!))) return 'Historical price expired'
+  if (!historical && !offer.seller.trim()) return 'Seller unknown'
+  if (offer.available!==true && (!historical || offer.available===false)) return offer.available === null ? 'Availability unknown' : 'Unavailable'
   if (!Number.isSafeInteger(offer.cents) || offer.cents < 0 || !Number.isSafeInteger(offer.pack) || offer.pack < 1) return 'Invalid price or pack size'
-  if (line.exact && !same(line.exact, offer.title)) return 'Different exact product'
+  if (line.exact && !exactMatch(line.exact, offer.title)) return 'Different exact product'
   if (line.must.some(tag => !offer.tags.some(value => same(tag, value)))) return 'Must-have missing'
   if (line.brand && !same(line.brand, offer.brand)) return 'Different brand'
-  if (line.size && !same(line.size, offer.size)) return 'Different size'
+  if (line.size && !sizeMatch(line.size,offer.size,offer.title)) return 'Different size'
   if (!line.multi && offer.pack > 1) return 'Multipack requires approval'
-  if (!offer.standard) return 'Shipping fee unknown'
+  if (line.priceCap != null && offer.cents > Math.round(line.priceCap*100)*offer.pack) return 'Above item price cap'
   return ''
 }
 
-export function shipping(store: Store, subtotal: number) {
+export function hasStandardShipping(offer: Pick<Offer,'retailer'|'seller'|'standard'>) {
+  return offer.retailer!=='Amazon' && offer.standard && same(offer.seller,offer.retailer)
+}
+
+export function exclusion(line: Line, offer: Offer) {
+  return selectionIssue(line,offer) || (offer.historicalPriceAt?'Historical price estimate':'') || (hasStandardShipping(offer)?'':'Shipping fee unknown')
+}
+
+export function shipping(store: PolicyStore, subtotal: number) {
   return subtotal >= policies[store].threshold ? 0 : policies[store].fee
 }
 
@@ -74,16 +91,32 @@ function buy(line: Line, offer: Offer, requested: number): Purchase {
   return { line, offer, requested, packs, cost: packs * offer.cents }
 }
 function plan(purchases: Purchase[]): Plan {
-  const orders = stores.flatMap(store => {
+  const orders = ([...stores,'Amazon'] as const).flatMap(store => {
     const items = purchases.filter(item => item.offer.retailer === store)
     if (!items.length) return []
     const subtotal = items.reduce((sum, item) => sum + item.cost, 0)
-    return [{store, subtotal, shipping: items.every(item => item.offer.standard) ? shipping(store, subtotal) : null}]
+    return [{store, subtotal, shipping: store!=='Amazon' && items.every(item => !item.offer.historicalPriceAt && hasStandardShipping(item.offer)) ? shipping(store, subtotal) : null}]
   })
   const subtotal = orders.reduce((sum, order) => sum + order.subtotal, 0)
   const total = orders.some(order => order.shipping === null) ? null : orders.reduce((sum, order) => sum + order.subtotal + (order.shipping ?? 0), 0)
   return { purchases, orders, subtotal, total }
 }
+export function selectedCart(lines: Line[], selections: ReadonlyMap<string, Offer>) {
+  const rows = lines.filter(line=>line.product || selections.has(line.id)).map(line=>{
+    const offer = selections.get(line.id)
+    if (!offer) return {line,offer,issue:'Choose a listing',purchase:null}
+    const issue = !Number.isSafeInteger(line.quantity) || line.quantity<1 || line.quantity>99 ? 'Invalid quantity' :
+      !same(line.product,offer.product) ? 'Item name changed' : exclusion(line,offer)
+    return {line,offer,issue,purchase:issue && issue!=='Shipping fee unknown' && issue!=='Historical price estimate'?null:buy(line,offer,line.quantity)}
+  })
+  const purchases = rows.flatMap(row=>row.purchase?[row.purchase]:[])
+  const priced = plan(purchases)
+  const historical = purchases.some(item=>Boolean(item.offer.historicalPriceAt))
+  const subtotal = purchases.filter(item=>!item.offer.historicalPriceAt).reduce((sum,item)=>sum+item.cost,0)
+  return {rows,subtotal,historical,estimatedSubtotal:priced.subtotal,remaining:rows.length-purchases.length,
+    complete:rows.length>0 && rows.length===purchases.length && priced.total!==null?priced:null}
+}
+
 type State = { totals: [number, number]; used: number; items: Purchase[] }
 const stateLimit = 10000
 const cost = (s: State) => s.totals[0] + s.totals[1]
@@ -123,7 +156,7 @@ export function optimize(lines: Line[], offers: Offer[]) {
       const increments: [number, number] = [0, 0]
       let used = 0
       for (const item of choice) {
-        const index = stores.indexOf(item.offer.retailer)
+        const index = stores.indexOf(item.offer.retailer as PolicyStore)
         increments[index] += item.cost
         used |= 1 << index
       }
@@ -157,16 +190,19 @@ export function optimize(lines: Line[], offers: Offer[]) {
   }
 }
 
-export function substitutions(lines: Line[], offers: Offer[], budget: number, original: Plan) {
+export function substitutions(lines: Line[], offers: Offer[], budget: number, original: Plan, fixed?: ReadonlyMap<string,Offer>) {
   return lines.flatMap(line => line.exact ? [] : [...new Set(line.flexible)].flatMap(field => {
     if (!line[field]) return []
     const values = new Set(offers.filter(offer => matchesLine(line, offer)).map(offer => offer[field].trim()).filter(value => value && !same(value, line[field])))
     return [...values].flatMap(value => {
       const changed = lines.map(entry => entry.id === line.id ? {...entry, [field]: value} : entry)
-      const result = optimize(changed, offers)
-      const next = result.best
+      const result = fixed ? null : optimize(changed, offers)
+      const next = fixed ? offers.filter(offer=>matchesLine(line,offer)).reduce<Plan|null>((winner,offer)=>{
+        const candidate = selectedCart(changed,new Map(fixed).set(line.id,offer)).complete
+        return candidate?.total!=null && (winner?.total==null || candidate.total<winner.total) ? candidate : winner
+      },null) : result?.best
       if (!next || next.total === null || original.total === null) return []
-      return [{line, field, value, next, changed, limited: result.limited, meets: next.total <= budget, savings: original.total - next.total}]
+      return [{line, field, value, next, changed, limited: result?.limited ?? false, meets: next.total <= budget, savings: original.total - next.total}]
     })
   })).sort((a,b) => b.savings - a.savings)
 }

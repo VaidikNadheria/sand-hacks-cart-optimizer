@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "One Less Tab",
+  "version": "1.0.0",
+  "description": "Demo · Sample prices and delivery",
+  "permissions": ["sidePanel", "storage", "scripting"],
+  "host_permissions": ["http://127.0.0.1:4180/*", "https://www.walmart.com/ip/*"],
+  "background": {"service_worker": "worker.js"},
+  "action": {"default_title": "Open One Less Tab"},
+  "side_panel": {"default_path": "panel.html"}
+}

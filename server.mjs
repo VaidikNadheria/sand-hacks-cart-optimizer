@@ -1,3 +1,4 @@
+import {handleDemo} from './demo-api.mjs'
 import {createServer} from 'node:http'
 import {readFile} from 'node:fs/promises'
 import {loadEnvFile} from 'node:process'
@@ -12,9 +13,9 @@ const listings = listingConfig(process.env)
 const types = {html:'text/html',js:'text/javascript',css:'text/css'}
 const port = Number(process.env.PORT || 4173)
 createServer(async (req,res)=>{
-  if (await handleApi(req,res,config) || await handleListings(req,res,listings)) return
+  if (handleDemo(req,res) || await handleApi(req,res,config) || await handleListings(req,res,listings)) return
   const pathname = req.url?.split('?')[0]
-  const file = pathname==='/' ? 'index.html' : /^\/assets\/[\w.-]+\.(js|css)$/.test(pathname??'') ? pathname.slice(1) : ''
+  const file = pathname==='/' ? 'index.html' : ['/demo.html','/sample.html','/sample-page.js'].includes(pathname) ? pathname.slice(1) : /^\/assets\/[\w.-]+\.(js|css)$/.test(pathname??'') ? pathname.slice(1) : ''
   try {
     if (!file) throw new Error('Unknown path')
     const body = await readFile(new URL('./dist/'+file,import.meta.url))

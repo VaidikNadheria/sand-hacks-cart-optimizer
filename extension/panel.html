@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>One Less Tab</title><link rel="stylesheet" href="panel.css"></head>
+<body><header><strong>One Less Tab</strong><p>Demo · Sample prices and delivery</p></header>
+<main>
+<section><h1>Compare a real item</h1><p>Open a Walmart product page and save the selected variant.</p><button type="button" id="compare-real">Compare prices</button><div id="real-results"></div></section><section><h2>Sample products</h2><p>Search the demo, then choose Open sample product on a result.</p><div id="open-list"></div><button id="save">Save this item</button></section>
+<section><h2>Compare saved items</h2><ul id="saved"></ul>
+<form id="compare"><label>Delivery ZIP <input id="zip" inputmode="numeric" maxlength="5" required placeholder="e.g. 92101"></label>
+<div class="zip-options"><button type="button" data-zip="92101">92101</button><button type="button" data-zip="92037">92037</button></div>
+<button>Compare saved items</button></form></section>
+<p id="status" role="status"></p><section id="matches" aria-label="Delivery results"></section></main>
+<script src="panel.js"></script></body></html>
